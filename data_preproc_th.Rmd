@@ -1,0 +1,1071 @@
+---
+title: "Data pre-processing"
+author: "Miguel Conde"
+date: "18 de mayo de 2016"
+output: 
+ html_document:
+  toc: true
+  toc_float: true
+  number_sections: true
+  toc_depth: 5
+
+---
+
+```{r}
+library(knitr)
+opts_chunk$set(warning = FALSE, message = FALSE, fig.align='center')
+```
+
+
+The need for data pre-processing is determined by the type of model being
+used. Some procedures, such as tree-based models, are notably insensitive to
+the characteristics of the predictor data. Others, like linear regression, are
+not. Here, a wide array of possible methodologies are discussed.
+
+How the predictors are encoded, called **feature engineering**, can have a
+significant impact on model performance. For example, using combinations
+of predictors can sometimes be more effective than using the individual values: the ratio of two predictors may be more effective than using two independent predictors. Often the most effective encoding of the data is informed by the modeler’s understanding of the problem and thus is not derived from any mathematical technique.
+
+The “correct” feature engineering depends on several factors. First, some encodings may be optimal for some models and poor for others. Also, in some models, multiple encodings of the same data may cause problems. Some models contain built-in feature selection, meaning that the model will only include predictors that help maximize accuracy. In these cases, the model can pick and choose which representation of the data is best.
+
+The relationship between the predictor and the outcome is a second factor.
+
+As with many questions of statistics, the answer to “which feature engineering
+methods are the best?” is that **it depends**. Specifically, it depends on
+the model being used and the true relationship with the outcome.
+
+# Illustrative data set
+
+```{r}
+library(AppliedPredictiveModeling)
+data(segmentationOriginal)
+
+## Retain the original training set
+# The analysis will focus on the training set samples, so the data are
+# filtered for these cells
+segTrain <- subset(segmentationOriginal, Case == "Train")
+
+## Remove the first three columns (identifier columns)
+# - Cell: identifies each cell
+# - Class: a factor vector indicates which cells are well segmented (). 
+# - Case: indicates which cells were originally used for the training and
+#         test sets. 
+segTrainX <- segTrain[, -(1:3)]
+segTrainClass <- segTrain$Class
+```
+
+Medical researchers often seek to understand the effects of medicines or diseases
+on the size, shape, development status, and number of cells in a living
+organism or plant. To do this, experts can examine the target serum or tissue
+under a microscope and manually assess the desired cell characteristics.
+
+This work is tedious and requires expert knowledge of the cell type and
+characteristics.
+
+Another way to measure the cell characteristics from these kinds of samples
+is by using an automated, high-throughput approach to assess samples’ cell
+characteristics (in this case, light scattering measurements are taken from the cells and then processed through imaging software to quantify the desired cell characteristics)
+
+# Data Transformations for Individual Predictors
+Transformations of predictor variables may be needed for several reasons.
+
+Some modeling techniques may have strict requirements, such as the predictors
+having a common scale. In other cases, creating a good model may be
+difficult due to specific characteristics of the data (e.g., outliers). Here we discuss *centering*, *scaling*, and *skewness transformations*.
+
+## Centering and scaling
+The most straightforward and common data transformation is to center scale
+the predictor variables. To center a predictor variable, the average predictor
+value is subtracted from all the values. As a result of centering, the predictor has a zero mean. Similarly, to scale the data, each value of the predictor
+variable is divided by its standard deviation. Scaling the data coerce the
+values to have a common standard deviation of one. These manipulations are generally used to improve the numerical stability of some calculations. The only real downside to these transformations is a loss of interpretability of the individual values since the data are no longer in the original units.
+
+
+## Transformations to Resolve Skewness
+Another common reason for transformations is to remove distributional *skewness*.
+
+An un-skewed distribution is one that is roughly symmetric. This means
+that the probability of falling on either side of the distribution’s mean is
+roughly equal. A right-skewed distribution has a large number of points on
+the left side of the distribution (smaller values) than on the right side (larger values). For example, the cell segmentation data contain a predictor that measures the standard deviation of the intensity of the pixels in the actin filaments. In the natural units, the data exhibit a strong right skewness; there is a greater concentration of data points at relatively small values and small number of large values.
+
+A general *rule of thumb* to consider is that skewed *data whose ratio of the
+highest value to the lowest value is greater than 20 have significant skewness*.
+
+Also, the *skewness statistic* can be used as a diagnostic. If the predictor
+distribution is roughly symmetric, the skewness values will be close to zero. Asthe distribution becomes more right skewed, the skewness statistic becomes
+larger. Similarly, as the distribution becomes more left skewed, the value
+becomes negative.
+
+```{r}
+## The column VarIntenCh3 measures the standard deviation of the intensity
+## of the pixels in the actin filaments
+
+max(segTrainX$VarIntenCh3)/min(segTrainX$VarIntenCh3)
+
+library(e1071)
+skewness(segTrainX$VarIntenCh3)
+
+```
+
+```{r}
+highSkew <- sapply(names(segTrainX), function(x) {
+  max(segTrainX[,x])/min(segTrainX[,x])
+})
+
+highSkew <- highSkew[highSkew > 20]
+```
+
+### log, square root, or inverse
+*Replacing the data with the log, square root, or inverse may help to remove the skew*.  After the transformation, the distribution is not entirely symmetric but these data are better behaved than when they were in the natural units.
+
+```{r}
+library(caret)
+par(mfrow=c(1,2))
+histogram(~segTrainX$VarIntenCh3,
+          xlab = "Natural Units",
+          type = "count")
+
+histogram(~log(segTrainX$VarIntenCh3),
+          xlab = "Log Units",
+          ylab = " ",
+          type = "count")
+par(mfrow=c(1,1))
+```
+
+### Statistical methods 
+#### Box and Cox
+Alternatively, *statistical methods* can be used to empirically identify an
+appropriate transformation. *Box and Cox* (1964) propose a family of transformations that are indexed by a parameter, denoted as $\lambda$:
+
+$$
+x^{*} = \begin{cases} \frac{x^{\lambda}-1}{\lambda} & \mbox{if } \lambda \neq 0  \\ \log{x} & \mbox{if } \lambda = 0  \end{cases}
+$$
+
+In addition to the log transformation, this family can identify square transformation ($\lambda = 2$), square root ($\lambda = 0.5$), inverse ($\lambda = -1$), and others in-between. Using the training data, $\lambda$ can be estimated. 
+
+This procedure would be applied independently to each predictor data **that contain values greater than zero**.
+
+
+```{r}
+## Use caret's preProcess function to transform for skewness
+segPP <- preProcess(segTrainX, method = "BoxCox")
+segPP
+
+## Apply the transformations
+segTrainTrans <- predict(segPP, segTrainX)
+
+## Results for a single predictor
+segPP$bc$VarIntenCh3
+```
+
+For the segmentation data, 69 predictors were not transformed due to
+zero or negative values and 3 predictors had $\lambda$ estimates within 1 ± 0.02,
+so no transformation was applied. The remaining 44 predictors had values
+estimated between −2 and 2.
+
+```{r}
+sum((segTrainTrans == segTrainX)[1,])
+
+# sum(sapply(segPP$bc, function(x) x["lambda"] <= -2 | x["lambda"] >= 2))
+```
+
+By instance, 
+
+```{r}
+segPP$bc$VarIntenCh3
+```
+shows an estimated transformation value of 0.1, indicating the log transformation is reasonable. 
+
+For other predictor:
+
+```{r}
+segPP$bc$PerimCh1
+```
+
+$\lambda$ estimate is −1.1. For these data, the original and transformed values are shown below.
+
+```{r}
+histogram(~segTrainX$PerimCh1,
+          xlab = "Natural Units",
+          type = "count")
+
+histogram(~segTrainTrans$PerimCh1,
+          xlab = "Transformed Data",
+          ylab = " ",
+          type = "count")
+```
+
+#### Yeo-Johnson
+If any predictor has values of zero, this excludes transformations
+such as the log transformation or the Box-Cox family of transformations. When we are faced with predictors containing zero values, the Yeo-Johnson family of transformations can be helpful. This family of transformations is very similar to the Box-Cox transformation, but can handle zero or negative predictor values.
+
+
+# Data Transformations for Multiple Predictors
+These transformations act on groups of predictors, typically the entire set
+under consideration. Of primary importance are *methods to resolve outliers*
+and *reduce the dimension of the data*.
+
+## Transformations to Resolve Outliers
+Outliers can be hard to define. However, we can often identify an unusual
+value by looking at a figure. When one or more samples are suspected
+to be outliers, the first step is to make sure that the values are scientifically
+valid (e.g., positive blood pressure) and that no data recording errors have
+occurred. Great care should be taken not to hastily remove or change values,
+especially if the sample size is small. With small sample sizes, apparent
+outliers might be a result of a skewed distribution where there are not yet enough data to see the skewness. Also, the outlying data may be an indication
+of a special part of the population under study that is just starting to be
+sampled. Depending on how the data were collected, a“cluster”of valid points
+that reside outside the mainstream of the data might belong to a different
+population than the other samples. 
+
+There are several predictive models that are resistant to outliers. Treebased
+classification models create splits of the training data and the prediction
+equation is a set of logical statements such as “if predictor A is greater
+than X, predict the class to be Y ,” so the outlier does not usually have
+an exceptional influence on the model. Also, support vector machines for
+classification generally disregard a portion of the training set samples when
+creating a prediction equation. The excluded samples may be far away from
+the decision boundary and outside of the data mainstream.
+
+If a model is considered to be sensitive to outliers, one data transformation
+that can minimize the problem is the *spatial sign*. This
+procedure projects the predictor values onto a multidimensional sphere. This
+has the effect of making all the samples the same distance from the center of
+the sphere.
+
+Mathematically, each sample is divided by its squared norm:
+
+$$
+x^{*}_{ij} = \frac{x_{ij}}{\sum_{j=1}^P x_{ij}^2 }
+$$
+
+Since the denominator is intended to measure the squared distance to the
+center of the predictor’s distribution, *it is important to center and scale the predictor data prior to using this transformation*. 
+
+Note that, unlike centering or scaling, *this manipulation of the predictors transforms them as a group. Removing predictor variables after applying the spatial sign transformation may be problematic*.
+
+## Data Reduction and Feature Extraction - Principal Components Analysis (PCA)
+*Data reduction techniques* are another class of predictor transformations.
+These methods *reduce the data by generating a smaller set of predictors that seek to capture a majority of the information in the original variables*. In
+this way, fewer variables can be used that provide reasonable fidelity to the
+original data. For most data reduction techniques, the new predictors are
+functions of the original predictors; therefore, all the original predictors are still needed to create the surrogate variables. This class of methods is often called *signal extraction* or *feature extraction* techniques.
+
+PCA is a commonly used data reduction technique that seeks to find linear combinations of the predictors, known as principal components (PCs), which capture the most possible variance. 
+
+The first PC is defined as the linear combination of the predictors that captures the most variability of all possible linear combinations. Then, subsequent PCs are derived such that these linear combinations capture the most remaining variability while also being *uncorrelated* with all previous PCs. 
+
+Mathematically, the jth PC can be written as:
+
+$$
+PC_j = (a_{j1} \times \mbox{Predictor 1}) + (a_{j2} \times \mbox{Predictor 2}) + ... + (a_{jP} \times \mbox{Predictor P})
+$$
+
+$P$ is the number of predictors. The coefficients $a_{j1},a_{j2},...,a_{jP}$ are called component weights and help us understand which predictors are most important to each PC.
+
+To illustrate PCA, consider the data in this figure:
+
+```{r}
+## R's prcomp is used to conduct PCA
+pr <- prcomp(~ AvgIntenCh1 + EntropyIntenCh1, 
+             data = segTrainTrans, 
+             scale. = TRUE)
+
+par(mfrow=c(1,2))
+
+transparentTheme(pchSize = .7, trans = .3)
+
+xyplot(AvgIntenCh1 ~ EntropyIntenCh1,
+       data = segTrainTrans,
+       groups = segTrain$Class,
+       xlab = "Channel 1 Fiber Width",
+       ylab = "Intensity Entropy Channel 1",
+       auto.key = list(columns = 2),
+       type = c("p", "g"),
+       main = "Original Data",
+       aspect = 1)
+
+xyplot(PC2 ~ PC1,
+       data = as.data.frame(pr$x),
+       groups = segTrain$Class,
+       xlab = "Principal Component #1",
+       ylab = "Principal Component #2",
+       main = "Transformed",
+       xlim = extendrange(pr$x),
+       ylim = extendrange(pr$x),
+       type = c("p", "g"),
+       aspect = 1)
+
+par(mfrow=c(1,1))
+```
+
+An example of the principal component transformation for the cell
+segmentation data. The *shapes* and *colors* indicate which cells were poorly
+segmented or well segmented.
+
+This set contains a subset of two correlated predictors, average pixel intensity of channel 1 and entropy of intensity values in the cell (a measure of cell shape), and a categorical response. Given the high correlation between the predictors (0.93), we could infer that average pixel intensity and entropy of intensity values measure redundant information about the cells and that either predictor or a linear combination of these predictors could be used in place of the original predictors.
+
+In this example, two PCs can be derived (Second plot): this
+transformation represents a rotation of the data about the axis of greatest
+variation. The first PC summarizes 97% of the original variability, while the
+second summarizes 3%. Hence, it is reasonable to use only the first PC for
+modeling since it accounts for the majority of information in the data.
+
+The *primary advantage of PCA*, and the reason that it has retained its
+popularity as a data reduction method, is that *it creates components that are uncorrelated*. As mentioned earlier, some predictive models
+prefer predictors to be uncorrelated (or at least low correlation) in order
+to find solutions and to improve the model’s numerical stability. PCA preprocessing creates new predictors with desirable characteristics for these kinds of models.
+
+While PCA delivers new predictors with desirable characteristics, *it must
+be used with understanding and care*. Notably, practitioners must understand
+that PCA seeks predictor-set variation without regard to any further
+understanding of the predictors (i.e., measurement scales or distributions) or to knowledge of the modeling objectives (i.e., response variable). Hence,
+without proper guidance, PCA can generate components that summarize
+characteristics of the data that are irrelevant to the underlying structure of the data and also to the ultimate modeling objective.
+
+### PCA, scales and skewness
+Because PCA seeks linear combinations of predictors that maximize
+variability, it will naturally first be drawn to summarizing predictors that
+have more variation. If the original predictors are on measurement scales that differ in orders of magnitude [consider demographic predictors such as income level (in dollars) and height (in feet)], then the first few components will focus on summarizing the higher magnitude predictors (e.g., income), while latter components will summarize lower variance predictors (e.g., height).
+
+This means that the PC weights will be larger for the higher variability predictors on the first few components. In addition, it means that PCA will be focusing its efforts on identifying the data structure based on measurement scales rather than based on the important relationships within the data for the current problem.
+
+For most data sets, predictors are on *different scales*. In addition, predictors may have *skewed distributions*. Hence, to help PCA avoid summarizing distributional differences and predictor scale information, it is best to *first transform skewed predictors* and then *center and scale the predictors* **prior to performing PCA**. Centering and scaling enables PCA to find the underlying relationships in the data without being influenced by the original measurement scales.
+
+### PCA: predictors' variability and response
+The second caveat of PCA is that *it does not consider the modeling objective or response variable when summarizing variability*. Because PCA is blind
+to the response, it is an **unsupervised technique**. If the predictive relationship between the predictors and response is not connected to the predictors’ variability, then the derived PCs will not provide a suitable relationship with the response. In this case, a **supervised technique**, like PLS, will derive components while simultaneously considering the corresponding response.
+
+### Applying PCA
+Once we have decided on the appropriate transformations of the predictor
+variables, we can then apply PCA. 
+
+```{r}
+## Apply PCA to the entire set of predictors.
+
+## There are a few predictors with only a single value, so we remove these first
+## (since PCA uses variances, which would be zero)
+
+isZV <- apply(segTrainX, 2, function(x) length(unique(x)) == 1)
+segTrainX <- segTrainX[, !isZV]
+
+segPP <- preProcess(segTrainX, c("BoxCox", "center", "scale"))
+segTrainTrans <- predict(segPP, segTrainX)
+
+segPCA <- prcomp(segTrainTrans, center = TRUE, scale. = TRUE)
+```
+
+PCA was applied to the entire set of segmentation data predictors. As
+previously demonstrated, there are some predictors with significant skewness.
+Since skewed predictors can have an impact on PCA, there were 44 variables
+that were transformed using the Box–Cox procedure previously described.
+After the transformations, the predictors were centered and scaled prior to
+conducting PCA.
+
+#### How many components to retain
+For data sets with many predictor variables, **we must decide how many components to retain**. A heuristic approach for determining the number of components to retain is to create a *scree plot*, which contains the ordered component number (x-axis) and the amount of summarized variability (y-axis).
+
+```{r}
+var_segPCA <- (segPCA$sdev)^2
+total_var_segPCA <- sum(var_segPCA)
+
+plot(100*var_segPCA/total_var_segPCA, type = "l",
+     ylab = "Percent of Total Variance",
+     xlab = "Component",
+     main = "")
+```
+
+This plot shows the percentage of the total variation in the data which was
+accounted for by each component. Notice that the percentages decrease as
+more components are added. The first three components accounted for 14 %,
+12.6%, and 9.4% of the total variance, respectively. After four components, there is a sharp decline in the percentage of variation being explained, although these four components describe only 42.4% of the information in the
+data set.
+
+For most data sets, the first few PCs will summarize a majority of the variability, and the plot will show a steep descent; variation will then taper off for the remaining components.
+
+Generally, the component number prior to the tapering off of variation is the
+maximal component that is retained. In the figure above, the variation tapers off at component 5. Using this rule of thumb, four PCs would be retained. 
+
+In an automated model building process, the optimal number of components can
+be determined by cross-validation.
+
+#### Examining the principal components
+Visually examining the principal components is a critical step for assessing
+data quality and gaining intuition for the problem. 
+
+##### Potential separation of classes
+
+To do this, the first few principal components can be plotted against each other and the plot symbols can be colored by relevant characteristics, such as the class labels. If PCA has captured a sufficient amount of information in the data, this type of plot can demonstrate clusters of samples or outliers that may prompt a closer examination of the individual data points.
+
+For classification problems, the PCA plot can show potential separation of classes (if there is a separation). This can set the initial expectations of the modeler; if there is little clustering of the classes, the plot of the principal component values will show a significant overlap of the points for each class. 
+
+Care should be taken when plotting the components; the scale of the components tend to become smaller as they account for less and less variation in the data. 
+
+For example, in Fig. 3.5, the values of component one range from −3.7 to 3.4 while the component two ranges from −1 to 1.1. If the axes are displayed on separate scales, there is the potential to over-interpret any patterns that might be seen for components that account for small amounts of variation.
+
+Next plot shows a scatter plot matrix for the first three principal components.
+
+```{r}
+## Plot a scatterplot matrix of the first three components
+transparentTheme(pchSize = .8, trans = .3)
+
+panelRange <- extendrange(segPCA$x[, 1:3])
+splom(as.data.frame(segPCA$x[, 1:3]),
+      groups = segTrainClass,
+      type = c("p", "g"),
+      as.table = TRUE,
+      auto.key = list(columns = 2),
+      prepanel.limits = function(x) panelRange)
+```
+
+
+The points are colored by class (segmentation quality). Since the percentages
+of variation explained are not large for the first three components, it
+is important not to over-interpret the resulting image. From this plot, there
+appears to be some separation between the classes when plotting the first and
+second components. However, the distribution of the well-segmented cells is
+roughly contained within the distribution of the poorly identified cells. One
+conclusion to infer from this image is that the cell types are not easily separated.
+
+However, this does not mean that other models, especially those which
+can accommodate highly nonlinear relationships, will reach the same conclusion.
+
+Also, while there are some cells in the data that are not completely
+within the data mainstream, there are no blatant outliers.
+
+##### Characterizing which predictors are associated with each component
+Another exploratory use of PCA is characterizing which predictors are associated with each component. 
+
+Recall that each component is a linear combination of the predictors and the coefficient for each predictor is called the loading. Loadings close to zero indicate that the predictor variable did not contribute much to that component.
+
+Next figure shows the loadings for the first three components in the cell segmentation data. Each point corresponds to a predictor variable and is colored by the optical channel used in the experiment.
+
+```{r}
+## Format the rotation values for plotting
+segRot <- as.data.frame(segPCA$rotation[, 1:3])
+
+## Derive the channel variable
+vars <- rownames(segPCA$rotation)
+channel <- rep(NA, length(vars))
+channel[grepl("Ch1$", vars)] <- "Channel 1"
+channel[grepl("Ch2$", vars)] <- "Channel 2"
+channel[grepl("Ch3$", vars)] <- "Channel 3"
+channel[grepl("Ch4$", vars)] <- "Channel 4"
+
+segRot$Channel <- channel
+segRot <- segRot[complete.cases(segRot),]
+segRot$Channel <- factor(as.character(segRot$Channel))
+
+## Plot a scatterplot matrix of the first three rotation variables
+
+transparentTheme(pchSize = .8, trans = .7)
+panelRange <- extendrange(segRot[, 1:3])
+library(ellipse)
+upperp <- function(...)
+  {
+    args <- list(...)
+    circ1 <- ellipse(diag(rep(1, 2)), t = .1)
+    panel.xyplot(circ1[,1], circ1[,2],
+                 type = "l",
+                 lty = trellis.par.get("reference.line")$lty,
+                 col = trellis.par.get("reference.line")$col,
+                 lwd = trellis.par.get("reference.line")$lwd)
+    circ2 <- ellipse(diag(rep(1, 2)), t = .2)
+    panel.xyplot(circ2[,1], circ2[,2],
+                 type = "l",
+                 lty = trellis.par.get("reference.line")$lty,
+                 col = trellis.par.get("reference.line")$col,
+                 lwd = trellis.par.get("reference.line")$lwd)
+    circ3 <- ellipse(diag(rep(1, 2)), t = .3)
+    panel.xyplot(circ3[,1], circ3[,2],
+                 type = "l",
+                 lty = trellis.par.get("reference.line")$lty,
+                 col = trellis.par.get("reference.line")$col,
+                 lwd = trellis.par.get("reference.line")$lwd)
+    panel.xyplot(args$x, args$y, groups = args$groups, subscripts = args$subscripts)
+  }
+splom(~segRot[, 1:3],
+      groups = segRot$Channel,
+      lower.panel = function(...){}, upper.panel = upperp,
+      prepanel.limits = function(x) panelRange,
+      auto.key = list(columns = 2))
+```
+Recall that channel one was associated with the cell body, channel two with the cell nucleus, channel
+three with actin, and channel four with tubulin
+
+For the first principal component, the loadings for the first channel
+(associated with the cell body) are on the extremes. This indicates that cell
+body characteristics have the largest effect on the first principal component
+and by extension the predictor values. 
+
+Also note that the majority of the loadings for the third channel (measuring actin and tubulin) are closer to zero for the first component. 
+
+Conversely, the third principal component is mostly associated with the third channel while the cell body channel plays a minor role here. 
+
+Even though the cell body measurements account for more variation in the data, this does not imply that these variables will be associated with predicting the segmentation quality.
+
+# Dealing with Missing Values
+
+In many cases, some predictors have no values for a given sample. These
+missing data could be *structurally missing*, such as the number of children a man has given birth to. In other cases, the value cannot or was not determined at the time of model building.
+
+It is important to understand *why* the values are missing. 
+
+## Informative missingness
+First and foremost, it is important to know if the pattern of missing data is related to the outcome. This is called “informative missingness” since the missing data pattern is instructional on its own. Informative missingness can induce significant bias in the model.
+
+Suppose we're trying to predict patient’s response to a drug. Suppose the drug was extremely ineffective or had significant side effects. The patient may be likely to miss doctor visits or to drop out of the study. In this case, there clearly is a relationship between the probability of missing values and the treatment. 
+
+Customer ratings can often have informative missingness; people
+are more compelled to rate products when they have strong opinions (good
+or bad). In this case, the data are more likely to be polarized by having few
+values in the middle of the rating scale.
+
+## "Missing data" vs. "Censored data"
+Missing data should not be confused with *censored* data where the exact
+value is missing but something is known about its value. 
+
+For example, a
+company that rents movie disks by mail may use the duration that a customer
+has kept a movie in their models. If a customer has not yet returned a movie,
+we do not know the actual time span, only that it is as least as long as the
+current duration. 
+
+Censored data can also be common when using laboratory
+measurements. Some assays cannot measure below their limit of detection.
+In such cases, we know that the value is smaller than the limit but was not
+precisely measured.
+
+Are censored data treated differently than missing data? When building
+traditional statistical models focused on interpretation or inference, the censoring
+is usually taken into account in a formal manner by making assumptions
+about the censoring mechanism. 
+
+For predictive models, it is more common
+to treat these data as simple missing data or use the censored value as
+the observed value. For example, when a sample has a value below the limit
+of detection, the actual limit can be used in place of the real value. For this
+situation, it is also common to use a random number between zero and the
+limit of detection.
+
+## Missing data in predictor variables vs missing data in samples
+In our experience, missing values are more often related to predictor variables
+than the sample. 
+
+Because of this, amount of missing data may be concentrated
+in a subset of predictors rather than occurring randomly across all
+the predictors. In some cases, the percentage of missing data is substantial
+enough to remove this predictor from subsequent modeling activities.
+
+There are cases where the missing values might be concentrated in specific
+samples. For large data sets, removal of samples based on missing values is
+not a problem, assuming that the missingness is not informative. In smaller
+data sets, there is a steep price in removing samples; some of the alternative
+approaches described below may be more appropriate.
+
+## General approaches for dealing with missing data
+If we do not remove the missing data, there are two general approaches.
+
++ First, a few predictive models, especially tree-based techniques, can specifically account for missing data. 
++ Alternatively, missing data can be **imputed**. In this case, we can use information in the training set predictors to, in essence, estimate the values of other predictors. This amounts to a predictive model within a predictive model.
+
+## Imputation
+Imputation has been extensively studied in the statistical literature, but
+in the context of generating correct hypothesis testing procedures in the presence of missing data. This is a separate problem; for predictive models we are concerned about accuracy of the predictions rather than making valid
+inferences. There is a small literature on imputation for predictive models.
+
+As previously mentioned, imputation is just another layer of modeling
+where we try to estimate values of the predictor variables based on other
+predictor variables. The most relevant scheme for accomplishing this is to
+use the training set to built an imputation model for each predictor in the
+data set. Prior to model training or the prediction of new samples, missing
+values are filled in using imputation. Note that this extra layer of models adds uncertainty. If we are using resampling to select tuning parameter values or to estimate performance, the imputation should be incorporated within the resampling. This will increase the computational time for building models, but it will also provide honest estimates of model performance.
+
+### Imputations based on relationships between the predictors
+If the **number of predictors affected by missing values is small**, an **exploratory analysis of the relationships between the predictors** is a good idea.
+For example, visualizations or methods like PCA can be used to determine if
+there are strong relationships between the predictors. If a variable with missing values is highly correlated with another predictor that has few missing values, a focused model (perhaps a simple linear regresssion one) can often be effective for imputation (see the example below).
+
+### Imputation with KNN
+One popular technique for imputation is a K-nearest neighbor model.
+A new sample is imputed by finding the samples in the training set “closest”
+to it and averages these nearby points to fill in the value.
+
+One advantage of this approach is that the imputed data are confined
+to be within the range of the training set values.
+
+One disadvantage is that the entire training set is required every time a missing value needs to be imputed.
+Also, the number of neighbors is a tuning parameter, as is the method for determining “closeness” of two points.
+
+# Removing Predictors
+There are potential advantages to removing predictors prior to modeling.
+
++ First, fewer predictors means decreased computational time and complexity.
++ Second, if two predictors are highly correlated, this implies that they are
+measuring the same underlying information. Removing one should not compromise
+the performance of the model and might lead to a more parsimonious
+and interpretable model. 
++ Third, some models can be crippled by predictors with degenerate distributions. In these cases, there can be a significant improvement
+in model performance and/or stability without the problematic variables.
+
+## Zero and Near-Zero Variance predictors
+Consider a predictor variable that has a single unique value; we refer to
+this type of data as a **zero variance predictor**. 
+
+For some models, such an uninformative variable may have little effect on the calculations. 
+A tree-based model is impervious to this type of predictor since it would never be used in a split. 
+However, a model such as linear regression would find these data problematic and is likely to cause an error in the computations.
+
+In either case, these data have no information and can easily be
+discarded. 
+
+Similarly, some predictors might have only a handful of unique values that occur with very low frequencies. These **“near-zero variance predictors”**
+may have a single value for the vast majority of the samples.
+
+### Diagnosing ZV and NZV
+How can the user diagnose this mode of problematic data?
+
++ First, the number of unique points in the data must be small relative to the number of samples. This is a necessary but not sufficient conidition in itself,  as many “dummy variables” generated from categorical predictors
+would fit this description.
++ The problem occurs when the frequency of these unique values is severely disproportionate. The ratio of the most common frequency to the second most common reflects the imbalance in the frequencies.
+
+Given this, a **rule of thumb** for detecting near-zero variance predictors is:
+
++ The fraction of unique values over the sample size is low (say 10%).
++ The ratio of the frequency of the most prevalent value to the frequency of
+the second most prevalent value is large (say around 20).
+
+If both of these criteria are true and the model in question is susceptible to
+this type of predictor, it may be advantageous to remove the variable from
+the model
+
+## Between-Predictor Correlations
+
+*Collinearity* is the technical term for the situation where a pair of predictor variables have a substantial correlation with each other. It is also possible to have relationships between multiple predictors at once (called *multicollinearity*).
+
+For example, the cell segmentation data have a number of predictors that
+reflect the size of the cell. There are measurements of the cell perimeter,
+width, and length as well as other, more complex calculations.
+
+### Visualizing correlations
+The figure below shows a **correlation matrix** of the training set:
+
++ Each pairwise correlation is computed from the training data and colored according to its **magnitude**: dark blue colors indicate strong positive correlations, dark red is used for strong negative correlations, and white implies no empirical relationship between the predictors.
++ The visualization is **symmetric**: the top and bottom diagonals show identical information.  
++ In this figure, the predictor variables have been grouped using a **clustering technique** so that collinear groups of predictors are adjacent to one another. 
+
+```{r}
+## To filter on correlations, we first get the correlation matrix for the 
+## predictor set
+
+segCorr <- cor(segTrainTrans)
+
+library(corrplot)
+corrplot(segCorr, order = "hclust", tl.cex = .35)
+```
+
+Looking along the diagonal, there are blocks of strong positive correlations that indicate “clusters” of collinearity. Near the center of the diagonal is a large block of predictors from the first channel. These predictors are related to cell size, such as the width and length of the cell.
+
+When the data set consists of too many predictors to examine visually,
+techniques such as PCA can be used to characterize the magnitude of the
+problem. For example, if the first principal component accounts for a large percentage of the variance, this implies that there is at least one group of predictors that represent the same information.
+
+For example, our previous PCA visualization indicates that the first 3–4 components have relative contributions to the total variance.
+
+This would indicate that there are at least 3–4 significant relationships
+between the predictors. The PCA loadings can be used to understand which
+predictors are associated with each component to tease out this relationships.
+
+### Avoiding highly correlated predictors
+In general, there are good reasons to avoid data with highly correlated
+predictors. 
+
+"Philosophical" reasons:
++ First, redundant predictors frequently add more complexity to the
+model than information they provide to the model. 
++ In situations where obtaining the predictor data is costly (either in time or money), fewer variables is obviously better. 
+
+Mathematical reasons:
++ Using highly correlated predictors in techniques like linear regression can result in highly unstable models, numerical errors, and degraded predictive performance.
+
+An heuristic approach to dealing with this issue is to **remove the minimum number of predictors to ensure that all pairwise correlations are below a certain threshold**. While this method only identify collinearities in two dimensions, it can have a significantly positive effect on the performance of some models.
+
+The algorithm is as follows:
+
+1. Calculate the correlation matrix of the predictors.
+2. Determine the two predictors associated with the largest absolute pairwise
+correlation (call them predictors A and B).
+3. Determine the average correlation between A and the other variables. Do the same for predictor B.
+4. If A has a larger average correlation, remove it; otherwise, remove predictor B.
+5. Repeat Steps 2–4 until no absolute correlations are above the threshold.
+
+The idea is to first remove the predictors that have the most correlated relationships.
+
+Suppose we wanted to use a model that is particularly sensitive to betweenpredictor correlations, we might apply a threshold of 0.75. This means that we want to eliminate the minimum number of predictors to achieve all pairwise correlations less than 0.75. For the segmentation data, this algorithm would suggest removing 43 predictors.
+
+```{r}
+## caret's findCorrelation function is used to identify columns to remove.
+highCorr <- findCorrelation(segCorr, .75)
+highCorr
+```
+
+As previously mentioned, feature extraction methods (e.g., principal components) are another technique for mitigating the effect of strong correlations between predictors. 
+
+However, these techniques make the connection between the predictors and the outcome more complex. 
+
+Additionally, since signal extraction methods are usually unsupervised, there is no guarantee that the resulting surrogate predictors have any relationship with the outcome.
+
+# Adding Predictors
+
+## Dummy variables
+When a predictor is categorical, such as gender or race, it is common to
+decompose the predictor into a set of more specific variables.
+
+To use these data in models, the categories are re-encoded into smaller bits
+of information called “dummy variables.” Usually, each category get its own
+dummy variable that is a zero/one indicator for that group.
+
+However, the decision to include all of the dummy variables can depend on the choice of the model. 
+
+Models that include an intercept term, such as simple linear regression, would have numerical issues if each dummy variable was included in the model. The reason is that, for each sample, these variables all add up to one and this would provide the same information as the intercept. 
+
+If the model is insensitive to this type of issue, using the complete set of dummy variables would help improve interpretation of the model.
+
+## Aditional terms
+### With simple models
+Many of the models described in this text automatically generate highly
+complex, nonlinear relationships between the predictors and the outcome.
+
+More simplistic models do not unless the user manually specifies which predictors should be nonlinear and in what way. 
+
+For example, logistic regression is a well-known classification model that, by default, generates linear classification boundaries.
+
+Since logistic regression is a well-characterized and stable model, using this model with some additional nonlinear terms may be preferable to highly complex techniques (which may overfit).
+
+### "Class centroids" for classification models
+This is one technique for augmenting the prediction data with addition of complex combinations of the data:
+
++ Calculate the “class centroids,” which are the
+centers of the predictor data for each class. 
++ Then for each predictor, the distance to each class centroid can be calculated and these distances can be added to the model.
+
+# Binning Predictors
+Note that the argument here is related to the **manual categorization of
+predictors prior to model building**. 
+
+There are several models, such as classification/ regression trees and multivariate adaptive regression splines, that estimate cut points in the process of model building. 
+
+The difference between these methodologies and manual binning is that the models use all the predictors to derive bins based on a single objective (such as maximizing accuracy). They evaluate many variables simultaneously and are usually based on statistically sound methodologies.
+
+While there are recommended techniques for pre-processing data, there are
+also methods to avoid. One common approach to simplifying a data set is
+to take a numeric predictor and pre-categorize or “bin” it into two or more
+groups prior to data analysis.
+
+The perceived advantages to this approach are:
++ The ability to make seemingly simple statements, either for sake of having
+a simple decision rule (as in the SIRS example) or the belief that there
+will be a simple interpretation of the model.
++The modeler does not have to know the exact relationship between the
+predictors and the outcome.
++ A higher response rate for survey questions where the choices are binned.
+For example, asking the date of a person’s last tetanus shot is likely to
+have fewer responses than asking for a range (e.g., in the last 2 years, in
+the last 4 years).
+
+There are many issues with the manual binning of continuous data. 
+
++ First, there can be a significant loss of performance in the model. Many of the modeling techniques are very good at determining complex
+relationships between the predictors and outcomes. Manually binning the
+predictors limits this potential. 
++ Second, there is a loss of precision in the predictions
+when the predictors are categorized. For example, if there are two
+binned predictors, only four combinations exist in the data set, so only simple predictions can be made. 
++ Third, research has shown that categorizing predictors can lead to a high rate of false positives (i.e., noise predictors determined to be informative).
+
+Unfortunately, the predictive models that are most powerful are usually
+the least interpretable. The bottom line is that the perceived improvement in
+interpretability gained by manual categorization is usually offset by a significant loss in performance. 
+
+Sincewe are concerned with predictive models (where interpretation is not the primary goal), loss of performance should be avoided. 
+
+In fact, in some cases it may be unethical to arbitrarily categorize
+predictors. For example, there is a great deal of research on predicting
+aspects of disease (e.g., response to treatment, screening patients). If a medical diagnostic is used for such important determinations, patients desire the most accurate prediction possible. As long as complex models are properly
+validated, it may be improper to use a model that is built for interpretation
+rather than predictive performance.
+
+# Computing
+## Preparing data
+```{r}
+library(AppliedPredictiveModeling)
+data(segmentationOriginal)
+```
+There were fields that identified each cell (called `Cell`) and a factor vector that indicated which cells were well segmented (`Class`). The variable `Case` indicated which cells were originally used for the training and test sets. The analysis is focused on the training set samples, so the data are
+filtered for these cells:
+
+```{r}
+segData <- subset(segmentationOriginal, Case == "Train")
+```
+
+The Class and Cell fields will be saved into separate vectors, then removed
+from the main object:
+
+```{r}
+cellID <- segData$Cell
+class <- segData$Class
+case <- segData$Case
+# Now remove the columns
+segData <- segData[, -(1:3)]
+```
+
+The original data contained several “status” columns which were binary versions of the predictors. To remove these, we find the column names containing "Status" and remove them:
+
+```{r}
+statusColNum <- grep("Status", names(segData))
+statusColNum
+
+segData <- segData[, -statusColNum]
+```
+
+## Transformations
+
+### Skewness and Cox-Box transformation
+As previously discussed, some features exhibited significantly skewness. The
+`skewness` function in the $\mbox{e1071}$ package calculates the sample skewness statistic for each predictor:
+
+```{r}
+library(e1071)
+# For one predictor:
+skewness(segData$AngleCh1)
+```
+
+```{r}
+# Since all the predictors are numeric columns, the apply function can
+# be used to compute the skewness across columns.
+skewValues <- apply(segData, 2, skewness)
+head(skewValues)
+```
+
+Using these values as a guide, the variables can be prioritized for visualizing the distribution. 
+
+The basic R function `hist` or the `histogram` function in the
+ $\mbox{lattice}$ can be used to assess the shape of the distribution.
+ 
+To determine which type of transformation should be used, the $\mbox{MASS}$
+package contains the `boxcox` function. Although this function estimates $\lambda$, it does not create the transformed variable(s). A $\mbox{caret}$ function, `BoxCoxTrans`, can find the appropriate transformation and apply them to the new data:
+
+```{r}
+library(caret)
+Ch1AreaTrans <- BoxCoxTrans(segData$AreaCh1)
+Ch1AreaTrans
+
+# The original data
+head(segData$AreaCh1)
+# After transformation
+predict(Ch1AreaTrans, head(segData$AreaCh1))
+(819^(-.9) - 1)/(-.9)
+```
+
+Another $\mbox{caret}$ function, `preProcess`, applies this transformation to a set of predictors. This function is discussed below.
+
+### PCA transformation
+The base R function `prcomp` can be used for PCA. In the code below, the data are centered and scaled prior to PCA.
+
+```{r}
+pcaObject <- prcomp(segData, center = TRUE, scale. = TRUE)
+# Calculate the cumulative percentage of variance which each component
+# accounts for.
+percentVariance <- pcaObject$sd^2/sum(pcaObject$sd^2)*100
+percentVariance[1:3]
+```
+
+The transformed values are stored in `pcaObject` as a sub-object called `x`:
+```{r}
+head(pcaObject$x[, 1:5])
+```
+
+The another sub-object called `rotation` stores the variable loadings, where
+rows correspond to predictor variables and columns are associated with the
+components:
+```{r}
+head(pcaObject$rotation[, 1:3])
+```
+
+### Outliers and `spatialSign` tranformation
+The $\mbox{caret}$ package class `spatialSign` contains functionality for the spatial sign transformation. Although we will not apply this technique to these data, the basic syntax would be `spatialSign(segData)`.
+
+### Missing values
+Also, these data do not have missing values for imputation. To impute
+missing values:
++ The $\mbox{impute}$ package has a function, `impute.knn`, that uses K-nearest neighbors to estimate the missing data. 
++ The previously mentioned `preProcess` function applies imputation methods based on K-nearest neighbors or bagged trees.
+
+### `caret::preprocess` function
+To administer a series of transformations to multiple data sets, the $\mbox{caret}$ class `preProcess` has the ability to transform, center, scale, or impute values, as well as apply the spatial sign transformation and feature extraction. 
+
+The function calculates the required quantities for the transformation. After calling the `preProcess` function, the `predict` method applies the results to a set of data. 
+
+For example, to Box–Cox transform, center, and scale the data, then
+execute PCA for signal extraction, the syntax would be:
+
+```{r}
+trans <- preProcess(segData, method = c("BoxCox", "center", "scale", "pca"))
+trans
+
+# Apply the transformations:
+transformed <- predict(trans, segData)
+# These values are different than the previous PCA components since
+# they were transformed prior to PCA
+head(transformed[, 1:5])
+```
+
+The **order** in which the possible transformation are applied is **transformation, centering, scaling, imputation, feature extraction, and then spatial sign**.
+
+Using `?Preprocess` we can read:
+
+The operations are applied in this order: 
+
+1. Filtering
+    + zero-variance filter, near-zero variance filter
+2. Transformations
+    + Box-Cox/Yeo-Johnson/exponential transformation, 
+    + Centering, scaling, range, 
+4. Imputation, 
+5. Feature extraction PCA, ICA 
+6. Spatial sign. 
+
+
+Many of the modeling functions have options to center and scale prior
+to modeling. For example, when using the `train` function , there is an option to use `preProcess` prior to modeling within the resampling iterations.
+
+## Filtering
+
+### Near-zero variance predictors
+To filter for near-zero variance predictors, the $\mbox{caret}$ package function `nearZeroVar` will return the column numbers of any predictors that fulfill the conditions outlined before. 
+
+For the cell segmentation data, there are no problematic predictors:
+
+```{r}
+nearZeroVar(segData)
+
+# When predictors should be removed, a vector of integers is
+# returned that indicates which columns should be removed.
+```
+
+
+### Between-predictor correlations
+Similarly, to filter on between-predictor correlations, the `cor` function can calculate the correlations between predictor variables:
+
+```{r}
+correlations <- cor(segData)
+dim(correlations)
+correlations[1:4, 1:4]
+```
+
+To visually examine the correlation structure of the data, the $\mbox{corrplot}$ package contains an excellent function of the same name.
+
+The function has many options including one that will reorder the variables in a way that reveals clusters of highly correlated predictors.
+
+```{r}
+library(corrplot)
+corrplot(correlations, order = "hclust")
+```
+
+The size and color of the points are associated with the strength of correlation between two predictor variables.
+
+To filter based on correlations, the `findCorrelation` function will apply the algorithm seen before. For a given threshold of pairwise correlations, the function returns column numbers denoting the predictors that are recommended for deletion:
+
+```{r}
+highCorr <- findCorrelation(correlations, cutoff = .75)
+length(highCorr)
+head(highCorr)
+filteredSegData <- segData[, -highCorr]
+```
+
+
+There are also several functions in the $\mbox{subselect}$ package that can accomplish the same goal.
+
+## Creating Dummy Variables
+Several methods exist for creating dummy variables based on a particular
+model.  
+
+One approach, the formula method, allows great flexibility to create the model function. Using formulas in model functions parameterizes
+the predictors such that not all categories have dummy variables.
+
+As previously mentioned, there are occasions when a complete set of
+dummy variables is useful. For example, the splits in a tree-based model
+are more interpretable when the dummy variables encode all the information
+for that predictor. **We recommend using the full set if dummy variables when
+working with tree-based models**.
+
+To illustrate the code, we will take a subset of the cars data set in the
+$\mbox{caret}$ package. For 2005, Kelly Blue Book resale data for 804 GM cars were collected (Kuiper 2008). The object of the model was to predict the price of the car based on known characteristics. This demonstration will focus on the price, mileage, and car type (e.g., sedan) for a subset of vehicles:
+
+```{r}
+data(cars)
+type <- c("convertible", "coupe", "hatchback", "sedan", "wagon")
+cars$Type <- factor(apply(cars[, 14:18], 1, 
+                          function(x) type[which(x == 1)]))
+
+carSubset <- cars[sample(1:nrow(cars), 20), c(1, 2, 19)]
+
+head(carSubset)
+
+levels(carSubset$Type)
+```
+
+To model the price as a function of mileage and type of car, we can use
+the function `dummyVars` to determine encodings for the predictors. Suppose
+our first model assumes that the price can be modeled as a simple additive
+function of the mileage and type:
+
+```{r}
+simpleMod <- dummyVars(~Mileage + Type,
+                       data = carSubset,
+                       ## Remove the variable name from the
+                       ## column name
+                       levelsOnly = TRUE)
+simpleMod
+```
+
+To generate the dummy variables for the training set or any new samples,
+the predict method is used in conjunction with the `dummyVars` object:
+
+```{r}
+predict(simpleMod, head(carSubset))
+```
+
+
+The `type` field was expanded into five variables for five factor levels.
+
+The model is simple because it assumes that effect of the mileage is the same for every type of car. To fit a more advance model, we could assume that there is a *joint* effect of mileage and car type. This type of effect is referred to as an **interaction**. In the model formula, a colon between factors indicates that an interaction should be generated. For these data, this adds another five predictors to the data frame:
+
+```{r}
+withInteraction <- dummyVars(~Mileage + Type + Mileage:Type,
+                             data = carSubset,
+                             levelsOnly = TRUE)
+withInteraction
+predict(withInteraction, head(carSubset))
+```
+
+# Notes about data pre-processing and some types of models
+
+Along this chapter and in the exercices these observations have been found:
+
++ The need for data pre-processing is determined by the type of model being
+used. 
++ Some procedures, such as tree-based models, are notably insensitive to
+the characteristics of the predictor data. Others, like linear regression, are not.
+
+
++ There are several predictive models that are resistant to **outliers**. 
+    + **Treebased classification models** create splits of the training data and the prediction equation is a set of logical statements such as “if predictor A is greater than X, predict the class to be Y ,” so the outlier does not usually have an exceptional influence on the model. 
+    + Also, **support vector machines** for classification generally disregard a portion of the training set samples when creating a prediction equation. The excluded samples may be far away from the decision boundary and outside of the data mainstream.
++ A few predictive models, especially **tree-based techniques**, can specifically account for **missing data**. 
++ For some models, such an uninformative **ZVs and NZVs** may have little effect on the calculations. 
+    + A **tree-based model** is impervious to this type of predictor since it would never be used in a split. 
+    + However, a model such as **linear regression** would find these data problematic and is likely to cause an error in the computations.
++ There are occasions when a complete set of **dummy variables** is useful. For example, the splits in a **tree-based model** are more interpretable when the dummy variables encode all the information for that predictor. **We recommend using the full set if dummy variables when working with tree-based models**.
++ One way around **sparse and unbalanced predictors** is to use models that are not sensitive to this characteristic, such as **tree or rulebased models**, or **naive Bayes**.
